@@ -1,5 +1,6 @@
 require('dotenv').config();
 const express = require('express');
+const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const bcrypt = require('bcryptjs');
@@ -92,7 +93,36 @@ if (db.prepare('SELECT COUNT(*) c FROM posts').get().c === 0) {
 
 const app = express();
 app.use(express.json());
-app.use(express.static(path.join(__dirname, 'public')));
+
+// The website files normally live in public/. If they were uploaded flat at
+// the project root instead (no public/ folder), move them into public/ on
+// startup so the site still works. If that move is not possible, serve the
+// root as a fallback but never serve server code, the database or secrets.
+const PUBLIC_DIR = path.join(__dirname, 'public');
+const FRONTEND_FILES = ['index.html', 'admin.html', 'styles.css', 'app.js', 'admin.js', 'logo.png', 'logo-white.png', 'favicon.svg'];
+let hasPublic = fs.existsSync(path.join(PUBLIC_DIR, 'index.html'));
+if (!hasPublic && fs.existsSync(path.join(__dirname, 'index.html'))) {
+  try {
+    fs.mkdirSync(PUBLIC_DIR, { recursive: true });
+    for (const f of FRONTEND_FILES) {
+      const src = path.join(__dirname, f);
+      if (fs.existsSync(src)) fs.renameSync(src, path.join(PUBLIC_DIR, f));
+    }
+    hasPublic = fs.existsSync(path.join(PUBLIC_DIR, 'index.html'));
+    if (hasPublic) console.log('Moved flat website files into public/ — site will serve from there.');
+  } catch (e) {
+    console.warn('Could not move website files into public/:', e.message);
+  }
+}
+if (hasPublic) app.use(express.static(PUBLIC_DIR));
+else {
+  app.use((req, res, next) => {
+    if (/^\/(server\.js|package\.json|package-lock\.json|Dockerfile|\.gitignore|\.env.*|README\.md|mannyo\.db.*)/.test(req.path))
+      return res.status(404).send('Not found');
+    next();
+  });
+  app.use(express.static(__dirname));
+}
 
 // ---------- helpers ----------
 function auth(req, res, next) {
@@ -237,7 +267,11 @@ app.delete('/api/admin/messages/:id', auth, adminOnly, (req, res) => {
 });
 
 // ---------- pages ----------
-app.get('/admin', (req, res) => res.sendFile(path.join(__dirname, 'public', 'admin.html')));
-app.get('*', (req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
+function pageFile(name) {
+  const inPublic = path.join(PUBLIC_DIR, name);
+  return fs.existsSync(inPublic) ? inPublic : path.join(__dirname, name);
+}
+app.get('/admin', (req, res) => res.sendFile(pageFile('admin.html')));
+app.get('*', (req, res) => res.sendFile(pageFile('index.html')));
 
 app.listen(PORT, () => console.log(`MANNYO Website running on port ${PORT} — open http://localhost:${PORT}`));
